@@ -1,0 +1,8 @@
+{
+  "game_id": "color-sort-v1",
+  "title": "Color Sort",
+  "default_fps": 5,
+  "tags": ["sorting", "color", "offline"],
+  "class_name": "ColorSortGame",
+  "baseline_actions": [1]
+}

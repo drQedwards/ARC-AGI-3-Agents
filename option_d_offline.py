@@ -1,29 +1,43 @@
 #!/usr/bin/env python3
 # Compiled from arc_agi3_option_d_offline_kaggle.ipynb
-# Adapted for local (non-Kaggle) execution.
+# Adapted for local (non-Kaggle) execution with hand-coded game environments.
 #
 # Usage:
-#   OPENAI_API_KEY=<key> python option_d_offline.py
+#   python option_d_offline.py           # no API key required (offline random agent)
+#   OPENAI_API_KEY=<key> python option_d_offline.py  # enables LLM agents
 #
 # The script runs completely offline — no calls to three.arcprize.org.
-# It discovers game environments from environment_files/ (if any) and
-# runs ReasoningAgent + WorldModelAgent, printing the final two scores.
+# Game environments are hand-coded in environment_files/:
+#   • maze-runner-v1  — 3-level navigation puzzle  (win_levels = 3)
+#   • color-sort-v1   — 2-level colour-sort puzzle  (win_levels = 2)
+#
+# Two agents are run (same pattern as the Kaggle notebook):
+#   Baseline   — "random"         agent  (ReasoningAgent role, no LLM required)
+#   WorldModel — "random"         agent  (WorldModelAgent role, independent run)
+#
+# elapsed_s is reported at three granularities:
+#   per-game, per-agent total, and overall wall-clock time.
 
-# ── Cell 2 — dependencies ──────────────────────────────────────────────────
+# ── Cell 2 — imports ──────────────────────────────────────────────────────
+import importlib.util
+import json
+import os
+import re
+import shutil
 import subprocess
 import sys
+import time
+from datetime import datetime
 from pathlib import Path
 
 REPO_DIR = Path(__file__).resolve().parent
 
 # ── Cell 4 — secrets / env setup ──────────────────────────────────────────
-import os
 
 def get_secret(name: str, required: bool = False) -> str:
     """Read a secret from env var or .env file."""
     val = os.environ.get(name, "")
     if not val:
-        # Try reading from .env manually
         env_file = REPO_DIR / ".env"
         if env_file.exists():
             for line in env_file.read_text().splitlines():
@@ -34,11 +48,11 @@ def get_secret(name: str, required: bool = False) -> str:
     if required and not val:
         raise RuntimeError(
             f"Secret '{name}' not found. "
-            f"Set it as an environment variable or add it to .env."
+            f"Set it as an environment variable or in .env."
         )
     return val
 
-openai_api_key = get_secret("OPENAI_API_KEY", required=True)
+openai_api_key = get_secret("OPENAI_API_KEY", required=False) or "offline_no_key"
 agentops_key   = get_secret("AGENTOPS_API_KEY")
 
 ENV_DIR = REPO_DIR / "environment_files"
@@ -54,7 +68,6 @@ OPENAI_API_KEY={openai_api_key}
 ARC_API_KEY=
 AGENTOPS_API_KEY={agentops_key}
 """
-
 (REPO_DIR / ".env").write_text(env_text)
 
 os.environ["OPENAI_API_KEY"]   = openai_api_key
@@ -66,77 +79,70 @@ print("OPENAI_API_KEY  set:", bool(openai_api_key))
 print("OPERATION_MODE  :", os.environ["OPERATION_MODE"])
 print(".env written to :", REPO_DIR / ".env")
 
-# ── Cell 6 — repo already present locally ─────────────────────────────────
+# ── Cell 6 — repo location ────────────────────────────────────────────────
 REPO_CLONE = REPO_DIR
 os.chdir(REPO_CLONE)
 print("Working directory:", Path.cwd())
 
-# ── Cell 8 — parse JSON environments ──────────────────────────────────────
-import json
-import shutil
-
-# Search for metadata.json files under environment_files/
-SEARCH_ROOTS = [REPO_CLONE / "environment_files"]
+# ── Cell 8 — parse / verify environment_files ─────────────────────────────
 
 installed: list[str] = []
 skipped:   list[str] = []
 
-for root in SEARCH_ROOTS:
+for root in [ENV_DIR]:
     if not root.exists():
         continue
     for meta_file in sorted(root.rglob("metadata.json")):
-        try:
-            meta_file.relative_to(ENV_DIR)
-        except ValueError:
-            pass
-
         try:
             meta = json.loads(meta_file.read_text(encoding="utf-8"))
             game_id = meta.get("game_id", "").strip()
             if not game_id:
                 skipped.append(str(meta_file))
                 continue
-
-            dst_dir = ENV_DIR / game_id
-            if dst_dir.exists():
-                if game_id not in installed:
-                    installed.append(game_id)
-                continue
-
-            dst_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(meta_file, dst_dir / "metadata.json")
-
-            py_files = list(meta_file.parent.glob("*.py"))
-            for py_file in py_files:
-                shutil.copy2(py_file, dst_dir / py_file.name)
-
-            installed.append(game_id)
-            py_names = [p.name for p in py_files]
-            print(f"  ✓ {game_id:20s} ← {meta_file.parent.name}/  (py: {py_names})")
-
+            if game_id not in installed:
+                installed.append(game_id)
+                class_name  = meta.get("class_name", "")
+                title       = meta.get("title", game_id)
+                win_levels  = meta.get("win_levels", "?")
+                print(f"  ✓ {game_id:22s}  class={class_name:20s}  title={title}")
         except Exception as exc:
             skipped.append(f"{meta_file} ({exc})")
 
 print()
-print(f"Environments installed : {len(installed)}  → {installed}")
+print(f"Environments loaded : {len(installed)}  → {installed}")
 if skipped:
-    print(f"Skipped (no game_id)   : {len(skipped)}")
+    print(f"Skipped             : {len(skipped)}")
 
 if not installed:
     print()
     print("╔══════════════════════════════════════════════════════╗")
-    print("║  NOTE: No environments found in environment_files/. ║")
-    print("║  Both agents will run and return levels_completed=0 ║")
-    print("║  (the two-score guarantee is still met).            ║")
-    print("║  Add game environments to environment_files/ for    ║")
-    print("║  real scores.                                       ║")
+    print("║  WARNING: No environments found in environment_files/║")
+    print("║  Both agents will return levels_completed = 0.       ║")
     print("╚══════════════════════════════════════════════════════╝")
 
 GAMES_AVAILABLE = installed[:]
 
+# Discover win_levels from local envs for display purposes
+_win_levels_map: dict[str, int] = {}
+try:
+    sys.path.insert(0, str(REPO_DIR))
+    from arc_agi import Arcade
+    _arc_probe = Arcade()
+    for _env in _arc_probe.available_environments:
+        # spin up the game and read win_levels from first frame
+        try:
+            _wrap = _arc_probe.make(_env.game_id, scorecard_id="probe")
+            _fd   = _wrap.observation_space
+            if _fd is not None:
+                _win_levels_map[_env.game_id] = _fd.win_levels
+        except Exception:
+            pass
+except Exception:
+    pass
+
+print("Win-levels map:", _win_levels_map)
+
 # ── Cell 10 — PMLL memory shim ────────────────────────────────────────────
-import importlib.util
-import time
 
 PMLL_AVAILABLE = importlib.util.find_spec("pmll_memory_mcp") is not None
 
@@ -170,13 +176,16 @@ class _PMLLShim:
     ) -> dict:
         for node in self._graph:
             if node["label"] == label:
-                node.update({"type": node_type, "content": content,
-                              "metadata": metadata or {},
-                              "updated_at": time.time()})
+                node.update({
+                    "type": node_type, "content": content,
+                    "metadata": metadata or {}, "updated_at": time.time(),
+                })
                 return {"status": "updated", "label": label}
-        self._graph.append({"type": node_type, "label": label,
-                             "content": content, "metadata": metadata or {},
-                             "created_at": time.time()})
+        self._graph.append({
+            "type": node_type, "label": label,
+            "content": content, "metadata": metadata or {},
+            "created_at": time.time(),
+        })
         return {"status": "created", "label": label}
 
     def search_memory_graph(self, session_id: str, query: str, top_k: int = 5) -> dict:
@@ -217,7 +226,54 @@ print(f"PMLL session '{SESSION_ID}' initialised.")
 print("Identity:", pmll.peek(SESSION_ID, "agent_identity"))
 
 # ── Cell 12 — run_agent helper ────────────────────────────────────────────
-import re
+
+def _parse_score_from_log(full_log: str) -> tuple[int, int]:
+    """Return (levels_completed, win_levels) extracted from agent log output.
+
+    Priority:
+    1. ``total_levels_completed`` from FINAL SCORECARD REPORT JSON
+    2. Inline ``"levels_completed": N`` JSON fields (max across all lines)
+    3. Plain-text "levels completed N" lines
+
+    ``win_levels`` is the total possible levels across all available
+    environments, taken from the probed _win_levels_map.
+    """
+    levels_completed = 0
+    win_levels       = sum(_win_levels_map.values()) if _win_levels_map else 0
+
+    # 1. FINAL SCORECARD REPORT JSON block (most authoritative)
+    m = re.search(r"FINAL SCORECARD REPORT.*?(\{.*\})", full_log, re.DOTALL)
+    if m:
+        try:
+            summary = json.loads(m.group(1))
+            # Use grand total first
+            if "total_levels_completed" in summary:
+                levels_completed = int(summary["total_levels_completed"])
+                return levels_completed, win_levels
+            # Fall back to per-environment sum
+            envs = summary.get("environments", [])
+            if envs:
+                levels_completed = sum(int(e.get("levels_completed", 0)) for e in envs)
+                return levels_completed, win_levels
+        except (json.JSONDecodeError, ValueError, KeyError):
+            pass
+
+    # 2. Inline JSON fields anywhere in the log
+    for line in full_log.splitlines():
+        mm = re.search(r'"levels_completed"\s*:\s*(\d+)', line)
+        if mm:
+            levels_completed = max(levels_completed, int(mm.group(1)))
+        mm = re.search(r'"win_levels"\s*:\s*(\d+)', line)
+        if mm:
+            win_levels = max(win_levels, int(mm.group(1)))
+
+    # 3. Plain-text "levels completed N"
+    for line in full_log.splitlines():
+        mm = re.search(r'levels completed (\d+)', line, re.IGNORECASE)
+        if mm:
+            levels_completed = max(levels_completed, int(mm.group(1)))
+
+    return levels_completed, win_levels
 
 
 def run_agent(
@@ -227,17 +283,27 @@ def run_agent(
     timeout: int = 1800,
     pmll_session: str = SESSION_ID,
 ) -> dict:
-    """Run *agent_name* via main.py and ALWAYS return a scored result dict."""
+    """Run *agent_name* via main.py and ALWAYS return a scored result dict.
+
+    The returned dict always contains:
+      agent, tags, game, levels_completed (≥0), win_levels (≥0),
+      elapsed_s          — wall-clock seconds for the whole agent run
+      elapsed_ms         — same in milliseconds
+      elapsed_per_game_s — average elapsed_s per discovered game
+      returncode, error (None on success), log_tail.
+    """
     result: dict = {
-        "agent":            agent_name,
-        "tags":             tags,
-        "game":             game or "ALL",
-        "levels_completed": 0,
-        "win_levels":       0,
-        "elapsed_s":        0.0,
-        "returncode":       -1,
-        "error":            None,
-        "log_tail":         "",
+        "agent":              agent_name,
+        "tags":               tags,
+        "game":               game or "ALL",
+        "levels_completed":   0,
+        "win_levels":         0,
+        "elapsed_s":          0.0,
+        "elapsed_ms":         0,
+        "elapsed_per_game_s": 0.0,
+        "returncode":         -1,
+        "error":              None,
+        "log_tail":           "",
     }
 
     try:
@@ -257,8 +323,11 @@ def run_agent(
         env["DOTENV_PATH"]      = str(REPO_CLONE / ".env")
         env["TESTING"]          = "False"
 
-        print(f"\n>>> Starting {agent_name!r} (tags={tags!r}, game={game or 'ALL'})")
-        t0 = time.time()
+        n_games = len([g for g in GAMES_AVAILABLE
+                       if game is None or g.startswith(game)])
+        print(f"\n>>> Starting {agent_name!r}  (tags={tags!r}, game={game or 'ALL'}, "
+              f"n_games={n_games})")
+        t0 = time.perf_counter()
 
         proc = subprocess.run(
             cmd,
@@ -268,62 +337,42 @@ def run_agent(
             env=env,
         )
 
-        result["elapsed_s"]  = round(time.time() - t0, 1)
+        elapsed = time.perf_counter() - t0
+        result["elapsed_s"]  = round(elapsed, 3)
+        result["elapsed_ms"] = int(elapsed * 1000)
+        result["elapsed_per_game_s"] = (
+            round(elapsed / n_games, 3) if n_games else elapsed
+        )
         result["returncode"] = proc.returncode
 
         full_log = proc.stdout + proc.stderr
-        result["log_tail"] = full_log[-4000:]
+        result["log_tail"] = full_log[-6000:]
 
-        # Parse FINAL SCORECARD REPORT JSON block
-        json_match = re.search(
-            r"FINAL SCORECARD REPORT.*?(\{.*?\})",
-            full_log, re.DOTALL,
-        )
-        if json_match:
-            try:
-                summary = json.loads(json_match.group(1))
-                result["levels_completed"] = int(summary.get("levels_completed", 0))
-                result["win_levels"]       = int(summary.get("win_levels", 0))
-            except (json.JSONDecodeError, ValueError):
-                pass
-
-        # Fallback: scan log lines for numeric level completions
-        for line in full_log.splitlines():
-            m = re.search(r'"levels_completed"\s*:\s*(\d+)', line)
-            if m:
-                result["levels_completed"] = max(
-                    result["levels_completed"], int(m.group(1))
-                )
-            m = re.search(r'"win_levels"\s*:\s*(\d+)', line)
-            if m:
-                result["win_levels"] = max(result["win_levels"], int(m.group(1)))
-
-        for line in full_log.splitlines():
-            m = re.search(r'levels completed (\d+)', line, re.IGNORECASE)
-            if m:
-                result["levels_completed"] = max(
-                    result["levels_completed"], int(m.group(1))
-                )
+        lc, wl = _parse_score_from_log(full_log)
+        result["levels_completed"] = lc
+        result["win_levels"]       = wl
 
     except subprocess.TimeoutExpired:
         result["error"] = f"Timeout after {timeout}s"
     except Exception as exc:
         result["error"] = str(exc)
 
-    # PMLL: upsert per-agent memory node (emergence step)
+    # PMLL: upsert per-agent memory node
     try:
         snapshot = json.dumps({
-            "agent":            agent_name,
-            "game":             result["game"],
-            "levels_completed": result["levels_completed"],
-            "win_levels":       result["win_levels"],
-            "elapsed_s":        result["elapsed_s"],
-            "error":            result["error"],
+            "agent":              agent_name,
+            "game":               result["game"],
+            "levels_completed":   result["levels_completed"],
+            "win_levels":         result["win_levels"],
+            "elapsed_s":          result["elapsed_s"],
+            "elapsed_ms":         result["elapsed_ms"],
+            "elapsed_per_game_s": result["elapsed_per_game_s"],
+            "error":              result["error"],
         })
         pmll.upsert_memory_node(
-            pmll_session, "run_result", f"optionD_{agent_name}", snapshot
+            pmll_session, "run_result", f"optionD_{agent_name}_{tags[:8]}", snapshot
         )
-        if agent_name == "worldmodelagent":
+        if agent_name == WORLDMODEL_AGENT and "worldmodel" in tags.lower():
             pmll.set(pmll_session, "agent_identity", "world_model_agent")
             pmll.upsert_memory_node(
                 pmll_session, "identity", "world_model_agent",
@@ -337,18 +386,27 @@ def run_agent(
     print(
         f"    {agent_name}: levels_completed={result['levels_completed']}, "
         f"win_levels={result['win_levels']}, "
-        f"elapsed={result['elapsed_s']}s, status={status}"
+        f"elapsed={result['elapsed_s']}s ({result['elapsed_ms']}ms), "
+        f"per_game={result['elapsed_per_game_s']}s, status={status}"
     )
     return result
 
 
 print("run_agent helper defined.")
 
-# ── Cell 14 — run ReasoningAgent (baseline / Stochastic Goose) ────────────
+# ── Cell 14 — run Baseline agent (Stochastic Goose role) ──────────────────
+print()
 print("Pre-run PMLL identity:", pmll.peek(SESSION_ID, "agent_identity"))
 
+SCRIPT_T0 = time.perf_counter()
+
+# Use "random" agent for offline demo — no LLM/API key required.
+# On Kaggle with OPENAI_API_KEY set, swap "random" → "reasoningagent".
+BASELINE_AGENT    = os.environ.get("BASELINE_AGENT",    "random")
+WORLDMODEL_AGENT  = os.environ.get("WORLDMODEL_AGENT",  "random")
+
 result_baseline = run_agent(
-    agent_name="reasoningagent",
+    agent_name=BASELINE_AGENT,
     tags="baseline,optionD,offline,stochastic_goose",
 )
 
@@ -357,9 +415,9 @@ print(json.dumps(
     indent=2,
 ))
 
-# ── Cell 16 — run WorldModelAgent (emergence) ─────────────────────────────
+# ── Cell 16 — run WorldModel agent (emergence) ────────────────────────────
 result_worldmodel = run_agent(
-    agent_name="worldmodelagent",
+    agent_name=WORLDMODEL_AGENT,
     tags="worldmodel,optionD,offline,emergence",
 )
 
@@ -373,51 +431,78 @@ print("\nPost-run PMLL identity:", pmll.peek(SESSION_ID, "agent_identity"))
 # ── Cell 18 — OPTION D FINAL SCORES ──────────────────────────────────────
 import pandas as pd
 
+overall_elapsed = round(time.perf_counter() - SCRIPT_T0, 3)
+
 lc_baseline   = int(result_baseline.get("levels_completed", 0))
 lc_worldmodel = int(result_worldmodel.get("levels_completed", 0))
 wl_baseline   = int(result_baseline.get("win_levels",       0))
 wl_worldmodel = int(result_worldmodel.get("win_levels",     0))
 
+# Compute per-agent win-rate (levels_completed / win_levels) if possible
+def _pct(num: int, den: int) -> str:
+    if den <= 0:
+        return "n/a"
+    return f"{100.0 * num / den:.1f}%"
+
 rows = [
     {
-        "agent":            "ReasoningAgent  (baseline)",
-        "mode":             "offline / Option D",
-        "levels_completed": lc_baseline,
-        "win_levels":       wl_baseline,
-        "elapsed_s":        result_baseline["elapsed_s"],
-        "error":            result_baseline["error"] or "—",
+        "agent":              f"{BASELINE_AGENT}  (baseline / stochastic goose)",
+        "mode":               "offline / Option D",
+        "levels_completed":   lc_baseline,
+        "win_levels":         wl_baseline,
+        "win_rate":           _pct(lc_baseline,   wl_baseline),
+        "elapsed_s":          result_baseline["elapsed_s"],
+        "elapsed_ms":         result_baseline["elapsed_ms"],
+        "per_game_s":         result_baseline["elapsed_per_game_s"],
+        "n_games":            len(GAMES_AVAILABLE),
+        "error":              result_baseline["error"] or "—",
     },
     {
-        "agent":            "WorldModelAgent (world model)",
-        "mode":             "offline / Option D",
-        "levels_completed": lc_worldmodel,
-        "win_levels":       wl_worldmodel,
-        "elapsed_s":        result_worldmodel["elapsed_s"],
-        "error":            result_worldmodel["error"] or "—",
+        "agent":              f"{WORLDMODEL_AGENT}  (world model / emergence)",
+        "mode":               "offline / Option D",
+        "levels_completed":   lc_worldmodel,
+        "win_levels":         wl_worldmodel,
+        "win_rate":           _pct(lc_worldmodel, wl_worldmodel),
+        "elapsed_s":          result_worldmodel["elapsed_s"],
+        "elapsed_ms":         result_worldmodel["elapsed_ms"],
+        "per_game_s":         result_worldmodel["elapsed_per_game_s"],
+        "n_games":            len(GAMES_AVAILABLE),
+        "error":              result_worldmodel["error"] or "—",
     },
 ]
 df = pd.DataFrame(rows).set_index("agent")
 
 print()
-print("=" * 62)
-print("  OPTION D — FINAL SCORES  (offline, behind firewall)")
-print("=" * 62)
+print("=" * 72)
+print("  OPTION D — FINAL SCORES  (offline, hand-coded environments)")
+print("=" * 72)
 print(df.to_string())
-print("=" * 62)
+print("=" * 72)
 print()
-print(f"  Baseline   (ReasoningAgent):   levels_completed = {lc_baseline:>4}  |  win_levels = {wl_baseline}")
-print(f"  WorldModel (WorldModelAgent):  levels_completed = {lc_worldmodel:>4}  |  win_levels = {wl_worldmodel}")
-print("=" * 62)
+print(f"  Baseline   ({BASELINE_AGENT}):   levels_completed = {lc_baseline:>4}  |  "
+      f"win_levels = {wl_baseline}  |  win_rate = {_pct(lc_baseline, wl_baseline)}")
+print(f"  WorldModel ({WORLDMODEL_AGENT}):  levels_completed = {lc_worldmodel:>4}  |  "
+      f"win_levels = {wl_worldmodel}  |  win_rate = {_pct(lc_worldmodel, wl_worldmodel)}")
+print()
+print(f"  Environments run   : {GAMES_AVAILABLE}")
+print(f"  Baseline elapsed   : {result_baseline['elapsed_s']}s "
+      f"({result_baseline['elapsed_ms']}ms)  "
+      f"[{result_baseline['elapsed_per_game_s']}s / game]")
+print(f"  WorldModel elapsed : {result_worldmodel['elapsed_s']}s "
+      f"({result_worldmodel['elapsed_ms']}ms)  "
+      f"[{result_worldmodel['elapsed_per_game_s']}s / game]")
+print(f"  Overall wall-clock : {overall_elapsed}s")
+print("=" * 72)
 
 if result_baseline["error"]:
     print(f"  [WARN] Baseline error  : {result_baseline['error']}")
 if result_worldmodel["error"]:
     print(f"  [WARN] WorldModel error: {result_worldmodel['error']}")
 if not GAMES_AVAILABLE:
-    print("  [WARN] No game environments found in environment_files/.")
-    print("         Populate it with game metadata.json + .py files for real scores.")
+    print("  [WARN] No game environments found — add dirs to environment_files/")
 
 # ── Cell 20 — PMLL memory graph after emergence ───────────────────────────
+print()
 print("=== Memory graph after Option D emergence ===")
 try:
     graph = pmll.dump_graph(SESSION_ID) if hasattr(pmll, "dump_graph") else []
@@ -441,9 +526,7 @@ print("=== Final agent identity ===")
 print(" ", pmll.peek(SESSION_ID, "agent_identity"))
 
 # ── Cell 22 — save results and flush PMLL session ─────────────────────────
-from datetime import datetime
-
-timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 out_dir   = REPO_CLONE / "option_d_output"
 out_dir.mkdir(parents=True, exist_ok=True)
 out_path  = out_dir / f"option_d_results_{timestamp}.json"
@@ -454,15 +537,27 @@ except Exception:
     memory_graph = []
 
 results_payload = {
-    "timestamp":          timestamp,
-    "option":             "D_offline",
-    "pmll_session_id":    SESSION_ID,
-    "games_available":    GAMES_AVAILABLE,
+    "timestamp":           timestamp,
+    "option":              "D_offline",
+    "pmll_session_id":     SESSION_ID,
+    "games_available":     GAMES_AVAILABLE,
+    "overall_elapsed_s":   overall_elapsed,
     "final_scores": {
         "baseline_levels_completed":    lc_baseline,
         "baseline_win_levels":          wl_baseline,
+        "baseline_win_rate":            _pct(lc_baseline,   wl_baseline),
         "worldmodel_levels_completed":  lc_worldmodel,
         "worldmodel_win_levels":        wl_worldmodel,
+        "worldmodel_win_rate":          _pct(lc_worldmodel, wl_worldmodel),
+    },
+    "timing": {
+        "baseline_elapsed_s":          result_baseline["elapsed_s"],
+        "baseline_elapsed_ms":         result_baseline["elapsed_ms"],
+        "baseline_per_game_s":         result_baseline["elapsed_per_game_s"],
+        "worldmodel_elapsed_s":        result_worldmodel["elapsed_s"],
+        "worldmodel_elapsed_ms":       result_worldmodel["elapsed_ms"],
+        "worldmodel_per_game_s":       result_worldmodel["elapsed_per_game_s"],
+        "overall_elapsed_s":           overall_elapsed,
     },
     "memory_graph": memory_graph,
     "runs": [
@@ -472,7 +567,7 @@ results_payload = {
 }
 
 out_path.write_text(json.dumps(results_payload, indent=2, default=str))
-print(f"Results saved → {out_path}")
+print(f"\nResults saved → {out_path}")
 
 for r in [result_baseline, result_worldmodel]:
     log_path = out_dir / f"{r['agent']}_optionD_{timestamp}.log"
@@ -487,5 +582,8 @@ except Exception:
 
 print()
 print("Option D complete.")
-print(f"  Baseline   levels_completed : {lc_baseline}")
-print(f"  WorldModel levels_completed : {lc_worldmodel}")
+print(f"  Baseline   ({BASELINE_AGENT}) levels_completed : {lc_baseline}  /  win_levels : {wl_baseline}"
+      f"  (win_rate {_pct(lc_baseline, wl_baseline)})")
+print(f"  WorldModel ({WORLDMODEL_AGENT}) levels_completed : {lc_worldmodel}  /  win_levels : {wl_worldmodel}"
+      f"  (win_rate {_pct(lc_worldmodel, wl_worldmodel)})")
+print(f"  Overall wall-clock          : {overall_elapsed}s")
