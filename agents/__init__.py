@@ -13,6 +13,7 @@ from .templates.multimodal import MultiModalLLM
 from .templates.random_agent import Random
 from .templates.reasoning_agent import ReasoningAgent
 from .templates.smolagents import SmolCodingAgent, SmolVisionAgent
+from .templates.world_model_agent import WorldModel, WorldModelAgent
 
 load_dotenv()
 
@@ -28,6 +29,7 @@ for rec in Recorder.list():
 
 # update the agent dictionary to include subclasses of LLM class
 AVAILABLE_AGENTS["reasoningagent"] = ReasoningAgent
+AVAILABLE_AGENTS["worldmodelagent"] = WorldModelAgent
 
 __all__ = [
     "Swarm",
@@ -41,6 +43,8 @@ __all__ = [
     "ReasoningLLM",
     "GuidedLLM",
     "ReasoningAgent",
+    "WorldModel",
+    "WorldModelAgent",
     "SmolCodingAgent",
     "SmolVisionAgent",
     "Agent",
