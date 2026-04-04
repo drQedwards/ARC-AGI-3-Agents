@@ -146,6 +146,26 @@ def main() -> None:
         logger.info(
             f"Using game '{game_prefix}' derived from playback recording filename"
         )
+
+    # Offline fallback: discover games from local environment_files/ when the API
+    # is unreachable and OPERATION_MODE=offline is set (Option D).
+    if not full_games and os.environ.get("OPERATION_MODE", "").strip().lower() == "offline":
+        try:
+            from arc_agi import Arcade
+
+            _offline_arc = Arcade()
+            full_games = [env.game_id for env in _offline_arc.available_environments]
+            if full_games:
+                logger.info(
+                    f"Offline mode: discovered {len(full_games)} local environment(s): {full_games}"
+                )
+            else:
+                logger.warning(
+                    "Offline mode: no environments found in environment_files/. "
+                    "Populate it from a Kaggle dataset before running Option D."
+                )
+        except Exception as _e:
+            logger.warning(f"Offline environment discovery failed: {_e}")
     games = full_games[:]
     if args.game:
         filters = args.game.split(",")

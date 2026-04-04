@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # run_comparison.sh — Run the ReasoningAgent vs WorldModelAgent comparison across
-# Option A (local/normal mode), Option B (online API), and Option C (Kaggle-style
-# full online sweep).
+# Option A (local/normal mode), Option B (online API), Option C (Kaggle-style
+# full online sweep), and Option D (fully offline, behind-firewall mode).
 #
 # Usage:
 #   cp .env.example .env          # then edit .env with your keys
@@ -134,14 +134,60 @@ env OPERATION_MODE=online SCHEME=https HOST=three.arcprize.org PORT=443 \
 echo "  ✓ optionC_worldmodel_worldmodelagent finished."
 
 # ---------------------------------------------------------------------------
+# Option D — Fully offline mode (local environment_files/ only, no API calls)
+#   OPERATION_MODE=offline tells Arcade to skip all HTTP requests.
+#
+#   Pre-condition: environment_files/ must contain at least one game folder,
+#   each with a metadata.json and a Python game implementation file.
+#
+#   Populate environment_files/ from any Kaggle dataset input that ships
+#   metadata.json + game .py files (e.g. arc-agi-3-environment-files):
+#
+#     python - <<'EOF'
+#     import json, shutil
+#     from pathlib import Path
+#     for mf in Path("/kaggle/input").rglob("metadata.json"):
+#         m = json.loads(mf.read_text())
+#         gid = m.get("game_id")
+#         if gid:
+#             dst = Path("environment_files") / gid
+#             dst.mkdir(parents=True, exist_ok=True)
+#             shutil.copy2(mf, dst / "metadata.json")
+#             for py in mf.parent.glob("*.py"):
+#                 shutil.copy2(py, dst / py.name)
+#     EOF
+#
+#   For Kaggle, prefer the dedicated notebook:
+#     arc_agi3_option_d_offline_kaggle.ipynb
+# ---------------------------------------------------------------------------
+echo ""
+echo "========================================================"
+echo "  OPTION D — Fully offline mode (local environment_files/)"
+echo "========================================================"
+
+run_agent \
+    "optionD_baseline_reasoningagent" \
+    "reasoningagent" \
+    "baseline,optionD,offline" \
+    "OPERATION_MODE=offline"
+
+run_agent \
+    "optionD_worldmodel_worldmodelagent" \
+    "worldmodelagent" \
+    "worldmodel,optionD,offline" \
+    "OPERATION_MODE=offline"
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 echo ""
 echo "========================================================"
 echo "  All runs complete.  Logs saved to: ${LOG_DIR}/"
 echo ""
-echo "  Scorecard URLs are printed at the end of each log."
+echo "  Scorecard URLs (Options A/B/C) printed at end of each log."
 echo "  View them at: https://three.arcprize.org/scorecards/<card_id>"
+echo ""
+echo "  Option D runs offline; no scorecard URL is generated."
 echo ""
 echo "  To compare results:"
 echo "    grep -h 'levels_completed\|scorecard' ${LOG_DIR}/*.log"
