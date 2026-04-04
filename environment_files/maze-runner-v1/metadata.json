@@ -4,5 +4,6 @@
   "default_fps": 5,
   "tags": ["maze", "navigation", "offline"],
   "class_name": "MazeRunnerGame",
-  "baseline_actions": [1, 2, 3, 4]
+  "baseline_actions": [1, 2, 3, 4],
+  "win_levels": 3
 }

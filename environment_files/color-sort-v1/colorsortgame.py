@@ -15,13 +15,14 @@ Display
 8×8 grid (64×64 px camera).  Tiles appear as coloured cells in row 3.
 Row 0 / row 7 are black walls; remaining rows are dark floor.
 
-Colour indices match arcengine palette:
-  0  = white  (floor / blank tiles)
-  5  = black  (walls)
-  6  = pink   (tile value 6)
-  9  = blue   (tile value 2)
-  11 = yellow (tile value 4 – labels are illustrative)
-  etc.
+Colour index → display colour (arcengine palette):
+  0 → white   (blank / inactive tiles)
+  1 → light   (tile value 1)
+  2 → dark grey (tile value 2)
+  3 → mid-grey (tile value 3)
+  4 → charcoal (tile value 4)
+  5 → black   (walls)
+  6 → pink    (tile value 6)
 
 Actions
 -------

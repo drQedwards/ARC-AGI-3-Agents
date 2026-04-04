@@ -9,7 +9,7 @@
 # The script runs completely offline — no calls to three.arcprize.org.
 # Game environments are hand-coded in environment_files/:
 #   • maze-runner-v1  — 3-level navigation puzzle  (win_levels = 3)
-#   • color-sort-v1   — 2-level colour-sort puzzle  (win_levels = 2)
+#   • color-sort-v1   — 2-level color-sort puzzle   (win_levels = 2)
 #
 # Two agents are run (same pattern as the Kaggle notebook):
 #   Baseline   — "random"         agent  (ReasoningAgent role, no LLM required)
@@ -68,6 +68,8 @@ OPENAI_API_KEY={openai_api_key}
 ARC_API_KEY=
 AGENTOPS_API_KEY={agentops_key}
 """
+# The .env file is gitignored; writing the key there mirrors the Kaggle
+# notebook pattern.  Do not commit .env to version control.
 (REPO_DIR / ".env").write_text(env_text)
 
 os.environ["OPENAI_API_KEY"]   = openai_api_key
