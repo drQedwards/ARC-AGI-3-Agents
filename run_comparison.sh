@@ -104,6 +104,9 @@ run_agent \
 # Option C — Full online sweep (all available games)
 #   Same as Option B but without a --game filter, so the Swarm plays every
 #   game returned by the API.  This is the "Kaggle-style" full evaluation.
+#
+#   Prefer the Kaggle notebook for Option C when running on Kaggle:
+#     arc_agi3_comparison_kaggle.ipynb
 # ---------------------------------------------------------------------------
 echo ""
 echo "========================================================"
