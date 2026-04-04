@@ -31,6 +31,111 @@ uv run main.py --agent=random --game=ls20
 
 For more information, see the [documentation](https://three.arcprize.org/docs#quick-start) or the [tutorial video](https://youtu.be/xEVg9dcJMkw).
 
+## Running Option A via run_comparison.sh
+
+Option A runs both `reasoningagent` (baseline) and `worldmodelagent` in **normal** mode — the engine checks `environment_files/` first, then falls back to the online API at `https://three.arcprize.org/api/games`.
+
+### Prerequisites (do these once)
+
+**1 — Clone your fork and enter the directory**
+
+```bash
+git clone https://github.com/drQedwards/ARC-AGI-3-Agents.git
+cd ARC-AGI-3-Agents
+```
+
+**2 — Install uv (the project's package manager)**
+
+```bash
+pip install uv
+```
+
+**3 — Install all Python dependencies**
+
+```bash
+uv sync
+```
+
+### Set up your API keys
+
+**4 — Copy the env template**
+
+```bash
+cp .env.example .env
+```
+
+**5 — Edit `.env` and fill in your real keys**
+
+```bash
+nano .env          # or: vim .env  / code .env
+```
+
+Change these three lines (the only ones that matter for Option A):
+
+```
+OPENAI_API_KEY=sk-...your_real_openai_key...
+ARC_API_KEY=...your_real_arc_api_key...
+OPERATION_MODE=normal
+```
+
+Save and exit. `OPERATION_MODE=normal` tells the engine to check `environment_files/` first, then fall back to `https://three.arcprize.org/api/games`.
+
+### Run the comparison script
+
+**6 — Run all options (A + B + C) against the default game (locksmith)**
+
+```bash
+bash run_comparison.sh
+```
+
+Or run against a specific game only:
+
+```bash
+bash run_comparison.sh locksmith
+```
+
+Or run only Option A manually (skipping B and C):
+
+```bash
+# ReasoningAgent (baseline)
+OPERATION_MODE=normal uv run main.py \
+  --agent=reasoningagent \
+  --game=locksmith \
+  --tags="baseline,optionA,normal"
+
+# WorldModelAgent
+OPERATION_MODE=normal uv run main.py \
+  --agent=worldmodelagent \
+  --game=locksmith \
+  --tags="worldmodel,optionA,normal"
+```
+
+### Read the results
+
+**7 — Logs land in `logs/<timestamp>/`**
+
+```bash
+ls logs/
+# e.g.: logs/20260404_093000/
+ls logs/20260404_093000/
+# optionA_baseline_reasoningagent.log
+# optionA_worldmodel_worldmodelagent.log
+```
+
+**8 — Quick score comparison across all log files**
+
+```bash
+grep -h 'levels_completed\|scorecard\|card_id' logs/*/*.log
+```
+
+**9 — Full scorecard URL** — each log ends with a line like:
+
+```
+Scorecard: https://three.arcprize.org/scorecards/<card-id>
+```
+
+Open that URL in a browser to see the side-by-side breakdown.
+
 ## Changelog
 ## [0.9.3] - 2026-01-29
 **Note: This will be a breaking change is you use the fields outline below**
