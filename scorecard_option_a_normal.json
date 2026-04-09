@@ -1,0 +1,21 @@
+{
+  "timestamp": "20260409_172726",
+  "option": "A_normal_local_fallback",
+  "game": "color-sort-v1",
+  "baseline": {
+    "agent": "random",
+    "card_id": "1f05e5db-d43c-4835-8e7c-33c524d07c18",
+    "levels_completed": 2,
+    "total_levels": 2,
+    "completion_rate": "100.0%"
+  },
+  "worldmodel": {
+    "agent": "random",
+    "card_id": "9e5509a5-2404-4572-9e42-596700f77e82",
+    "levels_completed": 2,
+    "total_levels": 2,
+    "completion_rate": "100.0%"
+  },
+  "api_key_used": "provided_by_user (ending ea32c5)",
+  "notes": "Executed with OPERATION_MODE=normal; code automatically switched runtime to offline fallback after API proxy failure so local environment_files could run."
+}
