@@ -1,13 +1,21 @@
 # ruff: noqa: E402
+import os
+
 from dotenv import load_dotenv
 
+# Preserve explicit shell-provided values when loading dotenv files.
+_runtime_env = {
+    key: os.environ.get(key)
+    for key in ["OPERATION_MODE", "SCHEME", "HOST", "PORT", "ARC_API_KEY"]
+    if os.environ.get(key) is not None
+}
 load_dotenv(dotenv_path=".env.example")
 load_dotenv(dotenv_path=".env", override=True)
+os.environ.update(_runtime_env)
 
 import argparse
 import json
 import logging
-import os
 import signal
 import sys
 import threading
@@ -19,6 +27,9 @@ import requests
 
 from agents import AVAILABLE_AGENTS, Swarm
 from agents.tracing import initialize as init_agentops
+
+# Ensure nested imports do not clobber explicit runtime environment values.
+os.environ.update(_runtime_env)
 
 logger = logging.getLogger()
 
@@ -118,12 +129,14 @@ def main() -> None:
 
     # Get the list of games from the API
     full_games = []
+    api_reachable = False
     try:
         with requests.Session() as session:
             session.headers.update(HEADERS)
             r = session.get(f"{ROOT_URL}/api/games", timeout=10)
 
         if r.status_code == 200:
+            api_reachable = True
             try:
                 full_games = [g["game_id"] for g in r.json()]
             except (ValueError, KeyError) as e:
@@ -147,25 +160,44 @@ def main() -> None:
             f"Using game '{game_prefix}' derived from playback recording filename"
         )
 
-    # Offline fallback: discover games from local environment_files/ when the API
-    # is unreachable and OPERATION_MODE=offline is set (Option D).
-    if not full_games and os.environ.get("OPERATION_MODE", "").strip().lower() == "offline":
+    # Local-environment fallback: discover games from environment_files/ when the
+    # API is unreachable and mode is not online-only.
+    op_mode = os.environ.get("OPERATION_MODE", "").strip().lower()
+    if not full_games and op_mode != "online":
+        prev_mode = os.environ.get("OPERATION_MODE")
         try:
             from arc_agi import Arcade
 
+            os.environ["OPERATION_MODE"] = "offline"
             _offline_arc = Arcade()
             full_games = [env.game_id for env in _offline_arc.available_environments]
+            if prev_mode is None:
+                os.environ.pop("OPERATION_MODE", None)
+            else:
+                os.environ["OPERATION_MODE"] = prev_mode
             if full_games:
+                mode_name = op_mode or "normal"
+                if mode_name == "normal" and not api_reachable:
+                    os.environ["OPERATION_MODE"] = "offline"
+                    logger.info(
+                        "Normal mode fallback is using offline runtime because the API "
+                        "is unreachable from this environment."
+                    )
                 logger.info(
-                    f"Offline mode: discovered {len(full_games)} local environment(s): {full_games}"
+                    f"{mode_name.capitalize()} mode fallback: discovered "
+                    f"{len(full_games)} local environment(s): {full_games}"
                 )
             else:
                 logger.warning(
-                    "Offline mode: no environments found in environment_files/. "
-                    "Populate it from a Kaggle dataset before running Option D."
+                    "Local fallback: no environments found in environment_files/. "
+                    "Populate it from a Kaggle dataset (or use OPERATION_MODE=online)."
                 )
         except Exception as _e:
-            logger.warning(f"Offline environment discovery failed: {_e}")
+            if prev_mode is None:
+                os.environ.pop("OPERATION_MODE", None)
+            else:
+                os.environ["OPERATION_MODE"] = prev_mode
+            logger.warning(f"Local environment discovery failed: {_e}")
     games = full_games[:]
     if args.game:
         filters = args.game.split(",")
