@@ -431,7 +431,6 @@ print(json.dumps(
 print("\nPost-run PMLL identity:", pmll.peek(SESSION_ID, "agent_identity"))
 
 # ── Cell 18 — OPTION D FINAL SCORES ──────────────────────────────────────
-import pandas as pd
 
 overall_elapsed = round(time.perf_counter() - SCRIPT_T0, 3)
 
@@ -472,13 +471,27 @@ rows = [
         "error":              result_worldmodel["error"] or "—",
     },
 ]
-df = pd.DataFrame(rows).set_index("agent")
 
 print()
 print("=" * 72)
 print("  OPTION D — FINAL SCORES  (offline, hand-coded environments)")
 print("=" * 72)
-print(df.to_string())
+header = (
+    f"{'agent':44s} | {'levels':>6s} | {'win':>3s} | {'rate':>6s} | "
+    f"{'elapsed_s':>9s} | {'per_game':>8s} | {'error':>8s}"
+)
+print(header)
+print("-" * len(header))
+for row in rows:
+    print(
+        f"{row['agent'][:44]:44s} | "
+        f"{row['levels_completed']:6d} | "
+        f"{row['win_levels']:3d} | "
+        f"{row['win_rate']:>6s} | "
+        f"{row['elapsed_s']:9.3f} | "
+        f"{row['per_game_s']:8.3f} | "
+        f"{str(row['error'])[:8]:8s}"
+    )
 print("=" * 72)
 print()
 print(f"  Baseline   ({BASELINE_AGENT}):   levels_completed = {lc_baseline:>4}  |  "

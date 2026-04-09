@@ -1,0 +1,22 @@
+{
+  "timestamp": "20260409_171927",
+  "option": "D_offline",
+  "games_available": [
+    "color-sort-v1",
+    "maze-runner-v1"
+  ],
+  "baseline": {
+    "levels_completed": 5,
+    "win_levels": 5,
+    "win_rate": "100.0%"
+  },
+  "worldmodel": {
+    "levels_completed": 5,
+    "win_levels": 5,
+    "win_rate": "100.0%"
+  },
+  "overall_elapsed_s": 7.516,
+  "source_results_file": "option_d_results_20260409_171927.json",
+  "api_key_used": "provided_by_user (ending ea32c5)",
+  "notes": "Offline Option D run with PMLL shim; online ARC scorecard endpoint unreachable from this environment."
+}
