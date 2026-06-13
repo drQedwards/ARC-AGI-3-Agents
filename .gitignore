@@ -22,3 +22,4 @@ memory.db
 
 option_d_output/
 .env
+environment_files/ls20/
