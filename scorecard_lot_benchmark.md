@@ -1,4 +1,4 @@
-# Language of Thought (LoT) Benchmark Scorecard
+# Language of Thought (LoT) Agent — Benchmark Scorecard
 
 Community leaderboard entry for the **`lotagent`** — a two-phase Language of
 Thought agent that uses structured symbolic programs as its intermediate
@@ -10,7 +10,7 @@ reasoning representation instead of free-form natural language chains.
 
 | Field | Value |
 |---|---|
-| **Agent name** | `lotagent` |
+| **Agent name** | `lotagent` / `languageofthought` |
 | **Approach** | Language of Thought — two-phase: synthesise → act |
 | **Phase 1 model** | `gpt-4o-mini` (thought synthesis) |
 | **Phase 2 model** | `o4-mini` (action selection via tool-call) |
@@ -24,13 +24,11 @@ reasoning representation instead of free-form natural language chains.
 
 Language of Thought (LoT) prompting uses a structured pseudo-code program as
 the *intermediate* reasoning representation rather than a natural-language chain
-of thought.  Each turn the agent:
+of thought. Each turn the agent:
 
-1. **Synthesises** a formal thought program with three blocks:
-   - `OBSERVE:` — grid size, player position estimate, dominant colours,
-     notable structures.
-   - `RULES:` — accumulated if/then rules about game mechanics discovered so
-     far (updated each turn).
+1. **Synthesises** a formal thought program (via `gpt-4o-mini`) with three blocks:
+   - `OBSERVE:` — grid size, player position estimate, dominant colours, notable structures.
+   - `RULES:` — accumulated if/then rules about game mechanics discovered so far (updated each turn).
    - `PLAN:` — a short logical decision tree (`IF condition THEN action`).
 
 2. **Appends** the new thought program to a rolling `theory` string (capped at
@@ -48,13 +46,16 @@ providing a natural mechanism for knowledge accumulation across turns.
 ## How to Run
 
 ```bash
-# Single run
+# Single run — Locksmith (ls20)
 uv run main.py --agent=lotagent --game=ls20 --tags="lot,benchmark,v1"
+
+# Same run using the full class name
+uv run main.py --agent=languageofthought --game=ls20 --tags="lot,benchmark,v1"
 
 # Record replay for later inspection
 uv run main.py --agent=lotagent --game=ls20 --tags="lot,benchmark,v1" --record
 
-# Run with verbose logging to inspect thought programs
+# Verbose logging to inspect thought programs in real time
 LOG_LEVEL=INFO uv run main.py --agent=lotagent --game=ls20 --tags="lot,benchmark,v1"
 ```
 
@@ -62,7 +63,7 @@ LOG_LEVEL=INFO uv run main.py --agent=lotagent --game=ls20 --tags="lot,benchmark
 
 ## Benchmark: Locksmith (`ls20`)
 
-Locksmith is a key-matching puzzle game.  The agent must navigate a top-down
+Locksmith is a key-matching puzzle game. The agent must navigate a top-down
 grid, find the correct key shape/colour, and reach the exit door — across 6
 levels with an energy budget.
 
@@ -73,8 +74,7 @@ levels with an energy budget.
 | v1  | TBD  | —               | —             | —             |
 | v2  | TBD  | —               | —             | —             |
 
-> Fill in results after running:
-> `uv run main.py --agent=lotagent --game=ls20 --tags="lot,benchmark,v1"`
+> Fill in results after running the command above.
 
 ---
 
@@ -84,7 +84,7 @@ levels with an energy budget.
 |---|---|---|
 | Intermediate representation | Free prose | Structured pseudo-code |
 | Knowledge accumulation | Implicit in context window | Explicit `theory` string |
-| Diagnosability | Hard to isolate failures | Per-block attribution |
+| Diagnosability | Hard to isolate failures | Per-block (OBSERVE/RULES/PLAN) attribution |
 | Token efficiency | Verbose | Compact symbolic form |
 | Rule learning signal | Buried in text | Explicit `RULES:` block |
 
@@ -93,14 +93,21 @@ performance comes from symbolic world-model accumulation vs. raw language
 reasoning — a meaningful question for ARC-AGI-3 which requires genuine
 generalisation.
 
+Comparing `lotagent` directly against `reasoningagent`, `worldmodelagent`, and
+`guidedllm` on `ls20` isolates the effect of the LoT intermediate
+representation, since all agents use the same `GameAction` tool schema and the
+same underlying OpenAI models.
+
 ---
 
 ## Files
 
-- `agents/templates/lot_agent.py` — agent implementation
-- `agents/__init__.py` — registration (`lotagent`, `languageofthought`)
-- `scorecard_lot_benchmark.md` — this file
+| File | Purpose |
+|---|---|
+| `agents/templates/lot_agent.py` | Agent implementation |
+| `agents/__init__.py` | Registration (`lotagent`, `languageofthought`) |
+| `scorecard_lot_benchmark.md` | This scorecard |
 
 ---
 
-*Submitted via `claude/epic-pasteur-v2vdrl`.*
+*Submitted via branch `claude/epic-pasteur-v2vdrl`.*
