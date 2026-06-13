@@ -2,12 +2,14 @@
 
 Two-phase reasoning approach:
   Phase 1 (Thought Synthesis): Generate a structured symbolic thought program
-    from the current frame using gpt-4o-mini (fast, cheap).
+    from the current frame using a fast model.
   Phase 2 (Action Selection): Use the synthesised program + accumulated theory
-    to select an action via o4-mini tool calls.
+    to select an action via tool calls.
 
-The agent maintains a growing `theory` string across turns — a formal program
-body that gets refined each turn as new observations accumulate.
+Supports OpenAI and Venice (OpenAI-compatible) backends:
+  - Set OPENAI_API_KEY for OpenAI  (models: gpt-4o-mini / o4-mini)
+  - Set VENICE_API_KEY for Venice  (models: llama-3.3-70b / llama-3.3-70b)
+    VENICE_BASE_URL defaults to https://api.venice.ai/api/v1
 """
 
 import logging
@@ -21,6 +23,30 @@ from openai import OpenAI as OpenAIClient
 from .llm_agents import ReasoningLLM
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Backend detection
+# ---------------------------------------------------------------------------
+
+_VENICE_BASE_URL = "https://api.venice.ai/api/v1"
+
+def _make_client(base_url: Optional[str] = None, api_key_env: str = "OPENAI_API_KEY") -> OpenAIClient:
+    """Build an OpenAI-compatible client, optionally pointed at Venice."""
+    venice_key = os.environ.get("VENICE_API_KEY", "")
+    openai_key = os.environ.get("OPENAI_API_KEY", "")
+
+    if venice_key:
+        url = os.environ.get("VENICE_BASE_URL", _VENICE_BASE_URL)
+        return OpenAIClient(api_key=venice_key, base_url=url)
+    return OpenAIClient(api_key=openai_key, base_url=base_url)
+
+
+def _default_models() -> tuple[str, str]:
+    """Return (synthesis_model, action_model) based on available keys."""
+    if os.environ.get("VENICE_API_KEY"):
+        return "llama-3.3-70b", "llama-3.3-70b"
+    return "gpt-4o-mini", "o4-mini"
+
 
 # ---------------------------------------------------------------------------
 # Prompt constants
@@ -83,37 +109,45 @@ _ACTION_USER_TMPL = textwrap.dedent(
 class LanguageOfThought(ReasoningLLM):
     """Language of Thought agent — two-phase: synthesise thought program, then act.
 
-    Phase 1 uses gpt-4o-mini to produce a structured OBSERVE / RULES / PLAN
-    program each turn. Phase 2 passes that program plus the rolling theory
-    context to o4-mini for tool-call action selection.
+    Phase 1 produces a structured OBSERVE / RULES / PLAN program each turn.
+    Phase 2 passes that program plus the rolling theory to the action model
+    for tool-call action selection.
+
+    Backend: Venice (VENICE_API_KEY) or OpenAI (OPENAI_API_KEY).
     """
 
     MAX_ACTIONS: int = 400
-    DO_OBSERVATION: bool = False   # we handle our own two-phase observation
-    MODEL: str = "o4-mini"
+    DO_OBSERVATION: bool = False
     MODEL_REQUIRES_TOOLS: bool = True
     MESSAGE_LIMIT: int = 8
-    REASONING_EFFORT: Optional[str] = "medium"
+    REASONING_EFFORT: Optional[str] = None  # Venice models don't support reasoning_effort
 
-    # Model used only for fast/cheap thought synthesis (Phase 1)
-    SYNTHESIS_MODEL: str = "gpt-4o-mini"
+    # Defaults; overridden at __init__ based on env
+    MODEL: str = "llama-3.3-70b"
+    SYNTHESIS_MODEL: str = "llama-3.3-70b"
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self.theory: str = ""               # accumulated program theory
-        self.lot_history: list[dict] = []   # per-turn thought programs + metadata
+        synthesis_model, action_model = _default_models()
+        self.SYNTHESIS_MODEL = synthesis_model
+        self.MODEL = action_model
+        # Venice doesn't support reasoning_effort param
+        if os.environ.get("VENICE_API_KEY"):
+            self.REASONING_EFFORT = None
+        self.theory: str = ""
+        self.lot_history: list[dict] = []
+        backend = "Venice" if os.environ.get("VENICE_API_KEY") else "OpenAI"
+        logger.info(
+            f"[LoT] Backend={backend} synthesis={self.SYNTHESIS_MODEL} action={self.MODEL}"
+        )
 
     # ------------------------------------------------------------------
     # Phase 1: Thought Synthesis
     # ------------------------------------------------------------------
 
     def _synthesize_thought(self, latest_frame: FrameData) -> str:
-        """Call gpt-4o-mini to produce a structured thought program for this frame.
-
-        Returns the raw thought-program string (plain text, no tool calls).
-        """
-        client = OpenAIClient(api_key=os.environ.get("OPENAI_API_KEY", ""))
-
+        """Produce a structured thought program for this frame."""
+        client = _make_client()
         frame_text = self.pretty_print_3d(latest_frame.frame)
         theory_snippet = self.theory[-1500:] if self.theory else "(none yet)"
 
@@ -150,45 +184,57 @@ class LanguageOfThought(ReasoningLLM):
         return thought_program.strip()
 
     # ------------------------------------------------------------------
-    # Phase 2: Override user prompt to inject LoT context
+    # Phase 2: Inject LoT context into the action prompt
     # ------------------------------------------------------------------
 
     def build_user_prompt(self, latest_frame: FrameData) -> str:
-        """Inject the current thought program and accumulated theory."""
         thought_program = getattr(
             self, "_current_thought_program", "(not yet synthesised — first turn)"
         )
         theory_snippet = self.theory[-1500:] if self.theory else "(none yet)"
-
         return _ACTION_USER_TMPL.format(
             thought_program=thought_program,
             theory=theory_snippet,
         )
 
     # ------------------------------------------------------------------
-    # Main action-selection override
+    # Build tools — Venice requires strict=False
+    # ------------------------------------------------------------------
+
+    def build_tools(self) -> list[dict[str, Any]]:
+        functions = self.build_functions()
+        tools: list[dict[str, Any]] = []
+        for f in functions:
+            tool: dict[str, Any] = {
+                "type": "function",
+                "function": {
+                    "name": f["name"],
+                    "description": f["description"],
+                    "parameters": f.get("parameters", {}),
+                },
+            }
+            # strict mode is OpenAI-only; skip for Venice
+            if not os.environ.get("VENICE_API_KEY"):
+                tool["function"]["strict"] = True
+            tools.append(tool)
+        return tools
+
+    # ------------------------------------------------------------------
+    # Override choose_action to use Venice-aware client
     # ------------------------------------------------------------------
 
     def choose_action(
         self, frames: list[FrameData], latest_frame: FrameData
     ) -> GameAction:
-        """Two-phase LoT action selection.
-
-        Turn 0 (no messages yet) → delegate to parent which returns RESET.
-        Turn 1+                  → synthesise thought, update theory, then
-                                   delegate to parent for tool-call action.
-        """
-        # First call: no messages yet — parent bootstraps with RESET
         if len(self.messages) == 0:
             logger.info("[LoT] First turn — delegating RESET to parent")
             action = super().choose_action(frames, latest_frame)
             return action
 
-        # --- Phase 1: synthesise thought program ---
+        # Phase 1: synthesise
         thought_program = self._synthesize_thought(latest_frame)
         self._current_thought_program = thought_program
 
-        # Store per-turn metadata
         self.lot_history.append(
             {
                 "turn": self.action_counter,
@@ -198,19 +244,18 @@ class LanguageOfThought(ReasoningLLM):
             }
         )
 
-        # Update accumulated theory (rolling window, max 3000 chars)
         separator = f"\n\n--- Turn {self.action_counter} ---\n"
         self.theory += separator + thought_program
         if len(self.theory) > 3000:
             self.theory = self.theory[-3000:]
 
-        # --- Phase 2: parent selects action via tool-call ---
+        # Phase 2: parent tool-call selection (uses self.MODEL via llm_agents.py)
         action = super().choose_action(frames, latest_frame)
 
-        # Attach LoT reasoning metadata
         lot_meta = {
             "agent": "LanguageOfThought",
             "approach": "language_of_thought",
+            "backend": "venice" if os.environ.get("VENICE_API_KEY") else "openai",
             "synthesis_model": self.SYNTHESIS_MODEL,
             "action_model": self.MODEL,
             "turn": self.action_counter,
@@ -238,5 +283,4 @@ class LanguageOfThought(ReasoningLLM):
         return action
 
 
-# Convenience alias used in AVAILABLE_AGENTS
 LotAgent = LanguageOfThought
