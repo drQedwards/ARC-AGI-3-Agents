@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 from .agent import Agent, Playback
 from .recorder import Recorder
 from .swarm import Swarm
-from .templates.langgraph_functional_agent import LangGraphFunc, LangGraphTextOnly
+from .templates.langgraph_functional_agent import LangGraph, LangGraphTextOnly
 from .templates.langgraph_random_agent import LangGraphRandom
 from .templates.langgraph_thinking import LangGraphThinking
 from .templates.llm_agents import LLM, FastLLM, GuidedLLM, ReasoningLLM
@@ -38,7 +38,7 @@ AVAILABLE_AGENTS["languageofthought"] = LanguageOfThought
 __all__ = [
     "Swarm",
     "Random",
-    "LangGraphFunc",
+    "LangGraph",
     "LangGraphTextOnly",
     "LangGraphThinking",
     "LangGraphRandom",
