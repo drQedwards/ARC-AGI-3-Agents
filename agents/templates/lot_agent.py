@@ -8,49 +8,56 @@ Two-phase reasoning approach:
 
 Supports OpenAI and Venice (OpenAI-compatible) backends:
   - Set OPENAI_API_KEY for OpenAI  (models: gpt-4o-mini / o4-mini)
-  - Set VENICE_API_KEY for Venice  (models: llama-3.3-70b / llama-3.3-70b)
+  - Set VENICE_API_KEY for Venice  (models: llama-3.3-70b for both phases)
     VENICE_BASE_URL defaults to https://api.venice.ai/api/v1
 """
 
+import base64
+import io
 import logging
 import os
 import textwrap
+from collections import Counter
 from typing import Any, Optional
 
+import numpy as np
 from arcengine import FrameData, GameAction
 from openai import OpenAI as OpenAIClient
+from PIL import Image, ImageDraw
 
 from .llm_agents import ReasoningLLM
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Backend detection
-# ---------------------------------------------------------------------------
-
 _VENICE_BASE_URL = "https://api.venice.ai/api/v1"
 
-def _make_client(base_url: Optional[str] = None, api_key_env: str = "OPENAI_API_KEY") -> OpenAIClient:
-    """Build an OpenAI-compatible client, optionally pointed at Venice."""
-    venice_key = os.environ.get("VENICE_API_KEY", "")
-    openai_key = os.environ.get("OPENAI_API_KEY", "")
+# ARC-AGI-3 official 16-colour palette (index -> hex)
+_KEY_COLORS = {
+    0: "#FFFFFF", 1: "#CCCCCC", 2: "#999999", 3: "#666666",
+    4: "#333333", 5: "#000000", 6: "#E53AA3", 7: "#FF7BCC",
+    8: "#F93C31", 9: "#1E93FF", 10: "#88D8F1", 11: "#FFDC00",
+    12: "#FF851B", 13: "#921231", 14: "#4FCC30", 15: "#A356D6",
+}
 
-    if venice_key:
-        url = os.environ.get("VENICE_BASE_URL", _VENICE_BASE_URL)
-        return OpenAIClient(api_key=venice_key, base_url=url)
-    return OpenAIClient(api_key=openai_key, base_url=base_url)
+
+def _venice_active() -> bool:
+    return bool(os.environ.get("VENICE_API_KEY"))
+
+
+def _make_client() -> OpenAIClient:
+    if _venice_active():
+        return OpenAIClient(
+            api_key=os.environ["VENICE_API_KEY"],
+            base_url=os.environ.get("VENICE_BASE_URL", _VENICE_BASE_URL),
+        )
+    return OpenAIClient(api_key=os.environ.get("OPENAI_API_KEY", ""))
 
 
 def _default_models() -> tuple[str, str]:
-    """Return (synthesis_model, action_model) based on available keys."""
-    if os.environ.get("VENICE_API_KEY"):
+    if _venice_active():
         return "llama-3.3-70b", "llama-3.3-70b"
     return "gpt-4o-mini", "o4-mini"
 
-
-# ---------------------------------------------------------------------------
-# Prompt constants
-# ---------------------------------------------------------------------------
 
 _SYNTHESIS_SYSTEM = (
     "You are a logical thought synthesizer for ARC-AGI-3 games. "
@@ -109,54 +116,101 @@ _ACTION_USER_TMPL = textwrap.dedent(
 class LanguageOfThought(ReasoningLLM):
     """Language of Thought agent — two-phase: synthesise thought program, then act.
 
-    Phase 1 produces a structured OBSERVE / RULES / PLAN program each turn.
-    Phase 2 passes that program plus the rolling theory to the action model
-    for tool-call action selection.
-
-    Backend: Venice (VENICE_API_KEY) or OpenAI (OPENAI_API_KEY).
+    Backend auto-selects: VENICE_API_KEY -> Venice (llama-3.3-70b),
+    else OPENAI_API_KEY -> OpenAI (gpt-4o-mini / o4-mini).
     """
 
     MAX_ACTIONS: int = 400
     DO_OBSERVATION: bool = False
     MODEL_REQUIRES_TOOLS: bool = True
     MESSAGE_LIMIT: int = 8
-    REASONING_EFFORT: Optional[str] = None  # Venice models don't support reasoning_effort
+    REASONING_EFFORT: Optional[str] = None
 
-    # Defaults; overridden at __init__ based on env
-    MODEL: str = "llama-3.3-70b"
-    SYNTHESIS_MODEL: str = "llama-3.3-70b"
+    MODEL: str = "o4-mini"
+    SYNTHESIS_MODEL: str = "gpt-4o-mini"
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         synthesis_model, action_model = _default_models()
         self.SYNTHESIS_MODEL = synthesis_model
         self.MODEL = action_model
-        # Venice doesn't support reasoning_effort param
-        if os.environ.get("VENICE_API_KEY"):
+        if _venice_active():
             self.REASONING_EFFORT = None
+        else:
+            self.REASONING_EFFORT = "medium"
         self.theory: str = ""
         self.lot_history: list[dict] = []
-        backend = "Venice" if os.environ.get("VENICE_API_KEY") else "OpenAI"
+        backend = "Venice" if _venice_active() else "OpenAI"
         logger.info(
             f"[LoT] Backend={backend} synthesis={self.SYNTHESIS_MODEL} action={self.MODEL}"
         )
 
     # ------------------------------------------------------------------
-    # Phase 1: Thought Synthesis
+    # Vision + token-diet helpers
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _last_grid(frame: FrameData) -> list[list[int]]:
+        return frame.frame[-1] if frame.frame else []
+
+    def _grid_summary(self, frame: FrameData) -> str:
+        """Compact textual stats instead of dumping the full grid (token diet)."""
+        grid = self._last_grid(frame)
+        if not grid or not grid[0]:
+            return "empty grid"
+        arr = np.array(grid)
+        h, w = arr.shape
+        counts = Counter(arr.flatten().tolist())
+        top = ", ".join(f"{c}x{n}" for c, n in counts.most_common(6))
+        return f"grid={h}x{w}, nonzero={int(np.sum(arr != 0))}, color_counts=[{top}]"
+
+    def _render_png(self, frame: FrameData, cell: int = 8) -> Optional[bytes]:
+        """Render the latest grid to a PNG so a vision model can locate the player."""
+        grid = self._last_grid(frame)
+        if not grid or not grid[0]:
+            return None
+        h, w = len(grid), len(grid[0])
+        img = Image.new("RGB", (w * cell, h * cell), color="white")
+        draw = ImageDraw.Draw(img)
+        for y in range(h):
+            for x in range(w):
+                draw.rectangle(
+                    [x * cell, y * cell, (x + 1) * cell, (y + 1) * cell],
+                    fill=_KEY_COLORS.get(grid[y][x], "#888888"),
+                )
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+
     def _synthesize_thought(self, latest_frame: FrameData) -> str:
-        """Produce a structured thought program for this frame."""
         client = _make_client()
-        frame_text = self.pretty_print_3d(latest_frame.frame)
+        frame_text = self._grid_summary(latest_frame)
         theory_snippet = self.theory[-1500:] if self.theory else "(none yet)"
 
-        user_content = _SYNTHESIS_USER_TMPL.format(
+        user_text = _SYNTHESIS_USER_TMPL.format(
             state=latest_frame.state.name,
             score=latest_frame.levels_completed,
             frame=frame_text,
             theory=theory_snippet,
         )
+
+        # Attach a rendered image so the model can actually locate the player.
+        # Vision is OpenAI-only here (gpt-4o-mini); Venice llama is text-only.
+        user_content: Any = user_text
+        if not _venice_active():
+            png = self._render_png(latest_frame)
+            if png:
+                b64 = base64.b64encode(png).decode()
+                user_content = [
+                    {"type": "text", "text": user_text},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/png;base64,{b64}",
+                            "detail": "high",
+                        },
+                    },
+                ]
 
         try:
             response = client.chat.completions.create(
@@ -183,23 +237,30 @@ class LanguageOfThought(ReasoningLLM):
 
         return thought_program.strip()
 
-    # ------------------------------------------------------------------
-    # Phase 2: Inject LoT context into the action prompt
-    # ------------------------------------------------------------------
+    def build_func_resp_prompt(self, latest_frame: FrameData) -> str:
+        """Compact tool-response (token diet): summary stats, NOT the full grid.
+
+        The parent LLM dumps the entire grid here each turn (30-90k tokens).
+        The LoT agent already digested the grid (with vision) during synthesis,
+        so the action phase only needs a compact summary.
+        """
+        return textwrap.dedent(
+            f"""\
+            # State: {latest_frame.state.name}
+            # Score (levels completed): {latest_frame.levels_completed}
+            # Frame summary: {self._grid_summary(latest_frame)}
+            """
+        )
 
     def build_user_prompt(self, latest_frame: FrameData) -> str:
         thought_program = getattr(
-            self, "_current_thought_program", "(not yet synthesised — first turn)"
+            self, "_current_thought_program", "(not yet synthesised - first turn)"
         )
         theory_snippet = self.theory[-1500:] if self.theory else "(none yet)"
         return _ACTION_USER_TMPL.format(
             thought_program=thought_program,
             theory=theory_snippet,
         )
-
-    # ------------------------------------------------------------------
-    # Build tools — Venice requires strict=False
-    # ------------------------------------------------------------------
 
     def build_tools(self) -> list[dict[str, Any]]:
         functions = self.build_functions()
@@ -213,49 +274,64 @@ class LanguageOfThought(ReasoningLLM):
                     "parameters": f.get("parameters", {}),
                 },
             }
-            # strict mode is OpenAI-only; skip for Venice
-            if not os.environ.get("VENICE_API_KEY"):
+            if not _venice_active():
                 tool["function"]["strict"] = True
             tools.append(tool)
         return tools
-
-    # ------------------------------------------------------------------
-    # Override choose_action to use Venice-aware client
-    # ------------------------------------------------------------------
 
     def choose_action(
         self, frames: list[FrameData], latest_frame: FrameData
     ) -> GameAction:
         if len(self.messages) == 0:
-            logger.info("[LoT] First turn — delegating RESET to parent")
-            action = super().choose_action(frames, latest_frame)
-            return action
+            logger.info("[LoT] First turn - delegating RESET to parent")
+            return super().choose_action(frames, latest_frame)
 
-        # Phase 1: synthesise
         thought_program = self._synthesize_thought(latest_frame)
         self._current_thought_program = thought_program
 
-        self.lot_history.append(
-            {
-                "turn": self.action_counter,
-                "thought_program": thought_program,
-                "state": latest_frame.state.name,
-                "score": latest_frame.levels_completed,
-            }
-        )
+        self.lot_history.append({
+            "turn": self.action_counter,
+            "thought_program": thought_program,
+            "state": latest_frame.state.name,
+            "score": latest_frame.levels_completed,
+        })
 
         separator = f"\n\n--- Turn {self.action_counter} ---\n"
         self.theory += separator + thought_program
         if len(self.theory) > 3000:
             self.theory = self.theory[-3000:]
 
-        # Phase 2: parent tool-call selection (uses self.MODEL via llm_agents.py)
-        action = super().choose_action(frames, latest_frame)
+        # Phase 2: parent tool-call selection. Route through Venice if active.
+        if _venice_active():
+            from openai import OpenAI
+            import agents.templates.llm_agents as llm_mod
+            original = llm_mod.OpenAIClient
+            llm_mod.OpenAIClient = lambda api_key="", **kw: OpenAI(
+                api_key=os.environ["VENICE_API_KEY"],
+                base_url=os.environ.get("VENICE_BASE_URL", _VENICE_BASE_URL),
+            )
+            try:
+                action = super().choose_action(frames, latest_frame)
+            except IndexError as exc:
+                logger.warning(f"[LoT] Venice returned no tool_call ({exc}); falling back to ACTION1")
+                action = GameAction.ACTION1
+            finally:
+                llm_mod.OpenAIClient = original
+        else:
+            try:
+                action = super().choose_action(frames, latest_frame)
+            except IndexError as exc:
+                logger.warning(f"[LoT] Empty tool_calls ({exc}); falling back to ACTION1")
+                action = GameAction.ACTION1
+            except Exception as exc:
+                # e.g. pydantic ValidationError when model emits out-of-range coords
+                logger.warning(f"[LoT] Action validation failed ({type(exc).__name__}: {exc}); falling back to ACTION1")
+                action = GameAction.ACTION1
 
         lot_meta = {
             "agent": "LanguageOfThought",
             "approach": "language_of_thought",
-            "backend": "venice" if os.environ.get("VENICE_API_KEY") else "openai",
+            "backend": "venice" if _venice_active() else "openai",
             "synthesis_model": self.SYNTHESIS_MODEL,
             "action_model": self.MODEL,
             "turn": self.action_counter,
@@ -276,7 +352,7 @@ class LanguageOfThought(ReasoningLLM):
             action.reasoning = lot_meta
 
         logger.info(
-            f"[LoT] Turn {self.action_counter} → {action.name} "
+            f"[LoT] Turn {self.action_counter} -> {action.name} "
             f"(theory={len(self.theory)} chars)"
         )
 
