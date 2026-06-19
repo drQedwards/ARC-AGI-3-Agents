@@ -123,8 +123,13 @@ def build_agent(
 # Required API
 
 
-class LangGraphFunc(LLM, Agent):
-    """An agent that always selects actions at random."""
+class LangGraph(LLM, Agent):
+    """Multi-modal LangGraph agent.
+
+    Uses LangGraph's functional API to build a stateful, cyclical agent runtime
+    that sends each frame to the LLM as an image and selects one tool/action per
+    turn. Run with ``--agent=langgraph``.
+    """
 
     MAX_ACTIONS = 80
     MODEL: str = "o4-mini"
@@ -173,7 +178,13 @@ class LangGraphFunc(LLM, Agent):
             rt.end(outputs={"state": self.state})
 
 
-class LangGraphTextOnly(LangGraphFunc, Agent):
+class LangGraphTextOnly(LangGraph, Agent):
+    """Text-only variant of :class:`LangGraph`.
+
+    Sends each frame to the LLM as a plain-text grid instead of an image. Run
+    with ``--agent=langgraphtextonly``.
+    """
+
     USE_IMAGE = False
 
 

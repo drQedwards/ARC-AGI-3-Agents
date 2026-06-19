@@ -31,6 +31,24 @@ uv run main.py --agent=random --game=ls20
 
 For more information, see the [documentation](https://three.arcprize.org/docs#quick-start) or the [tutorial video](https://youtu.be/xEVg9dcJMkw).
 
+## LangGraph Templates
+
+Build stateful agents with the popular [LangChain](https://www.langchain.com/) framework. These templates use [LangGraph](https://langchain-ai.github.io/langgraph/) to create cyclical, stateful agent runtimes that can manage complex reasoning flows and tool use within the ARC-AGI-3 environment.
+
+### Multi-Modal
+
+```bash
+# Run the LangGraph agent with image support
+uv run main.py --agent=langgraph --game=ls20
+```
+
+### Text only
+
+```bash
+# Run the LangGraph agent (text-only)
+uv run main.py --agent=langgraphtextonly --game=ls20
+```
+
 ## Running Option A via run_comparison.sh
 
 Option A runs both `reasoningagent` (baseline) and `worldmodelagent` in **normal** mode — the engine checks `environment_files/` first, then falls back to the online API at `https://three.arcprize.org/api/games`.
