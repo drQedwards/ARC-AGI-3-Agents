@@ -12,6 +12,7 @@ from .templates.llm_agents import LLM, FastLLM, GuidedLLM, ReasoningLLM
 from .templates.lot_agent import LanguageOfThought, LotAgent
 from .templates.multimodal import MultiModalLLM
 from .templates.openclaw_agent import OpenClaw
+from .templates.persistence_in_memory import PersistenceInMemory
 from .templates.random_agent import Random
 from .templates.reasoning_agent import ReasoningAgent
 from .templates.smolagents import SmolCodingAgent, SmolVisionAgent
@@ -34,6 +35,7 @@ AVAILABLE_AGENTS["reasoningagent"] = ReasoningAgent
 AVAILABLE_AGENTS["worldmodelagent"] = WorldModelAgent
 AVAILABLE_AGENTS["lotagent"] = LotAgent
 AVAILABLE_AGENTS["languageofthought"] = LanguageOfThought
+AVAILABLE_AGENTS["persistenceinmemory"] = PersistenceInMemory
 
 __all__ = [
     "Swarm",
@@ -59,4 +61,5 @@ __all__ = [
     "OpenClaw",
     "LanguageOfThought",
     "LotAgent",
+    "PersistenceInMemory",
 ]
